@@ -209,7 +209,7 @@ let STORAGE_OK = true;
 
 async function apiKv(body){
   const controller = new AbortController();
-  const timeoutId = setTimeout(()=>controller.abort(), 6000);
+  const timeoutId = setTimeout(()=>controller.abort(), 12000);
   let res;
   try{
     res = await fetch('/api/kv', {
@@ -218,6 +218,8 @@ async function apiKv(body){
       body: JSON.stringify(body),
       signal: controller.signal
     });
+  }catch(e){
+    throw new Error(e && e.name==='AbortError' ? 'TIMEOUT' : 'NETWORK_ERROR');
   }finally{
     clearTimeout(timeoutId);
   }
@@ -228,6 +230,13 @@ async function apiKv(body){
   return res.json();
 }
 
+// NOTE: storeSet no longer falls back to an in-memory variable on failure.
+// Previously, if the request to /api/kv failed for any reason (timeout, cold
+// start, connection hiccup), the write was silently kept only in a JS
+// variable that disappears on page reload — so people's submitted answers
+// looked "saved" in the UI but never actually reached the database. Now a
+// failed save throws, and callers (e.g. the assessment form) must catch it
+// and tell the person to retry instead of pretending it worked.
 async function storeGet(key){
   try{
     const r = await apiKv({ action:'get', key });
@@ -236,15 +245,10 @@ async function storeGet(key){
   return memoryStore[key] !== undefined ? JSON.parse(memoryStore[key]) : null;
 }
 async function storeSet(key, val){
-  try{
-    await apiKv({ action:'set', key, value: JSON.stringify(val) });
-    return;
-  }catch(e){}
-  memoryStore[key] = JSON.stringify(val);
+  await apiKv({ action:'set', key, value: JSON.stringify(val) });
 }
 async function storeDelete(key){
-  try{ await apiKv({ action:'delete', key }); return; }catch(e){}
-  delete memoryStore[key];
+  await apiKv({ action:'delete', key });
 }
 async function checkStorageHealth(){
   try{
@@ -285,7 +289,7 @@ async function getRoster(){
   let r = await storeGet(rosterKey());
   if(!r || r.length===0){
     r = SEED_ROSTER.slice();
-    await storeSet(rosterKey(), r);
+    try{ await storeSet(rosterKey(), r); }catch(e){ /* DB down banner already shown via STORAGE_OK */ }
   }
   return r;
 }
@@ -572,7 +576,12 @@ async function mountAdminHub(mount){
       if(i>=0) record.bawahan[i] = {nik:raterNik, nama:raterNama}; else record.bawahan.push({nik:raterNik, nama:raterNama});
     }
     upsertRoster(cur, record);
-    await saveRoster(cur);
+    try{
+      await saveRoster(cur);
+    }catch(e){
+      msgEl.innerHTML = `<div class="missing-note">Gagal menyimpan ke database (koneksi terputus atau server sibuk). Coba lagi.</div>`;
+      return;
+    }
     msgEl.innerHTML = `<div class="success-note">Ditambahkan: ${escapeHtml(raterNama)} sebagai ${ROLE_LABEL[role]} untuk ${escapeHtml(targetNama)}.</div>`;
     node.querySelector('#qa-rater-nik').value = '';
     node.querySelector('#qa-rater-nama').value = '';
@@ -616,7 +625,12 @@ async function mountAdminHub(mount){
       const cur = await getRoster();
       if(!findInRoster(cur, nik)){
         cur.push({ nik, nama, jabatan:'', unit:'', atasan:[], rekan:[], bawahan:[] });
-        await saveRoster(cur);
+        try{
+          await saveRoster(cur);
+        }catch(e){
+          alert('Gagal menyimpan peserta baru ke database (koneksi terputus atau server sibuk). Coba lagi.');
+          return;
+        }
       }
       STATE.pesertaNik=nik; STATE.pesertaNama=nama; STATE.view='adminPanel'; render();
     });
@@ -823,8 +837,8 @@ async function computeResultsForRecord(record, dataMap){
 async function exportResultsXlsx(progressEl){
   progressEl.innerHTML = `<div class="progress-label">Memuat data peserta...</div>`;
   const roster = await getRoster();
-  const summary = [['NIK','NAMA','JABATAN','UNIT','STATUS','SKOR ATASAN','SKOR REKAN KERJA','SKOR BAWAHAN','SKOR AKHIR','KATEGORI']];
-  const aspectRowsOut = [['NIK','NAMA','ASPEK OCEAN','SKOR ATASAN','SKOR REKAN KERJA','SKOR BAWAHAN','SKOR AKHIR ASPEK']];
+  const aspectTitles = OCEAN_DIMENSIONS.map(d=>d.title);
+  const summary = [['NIK','NAMA', ...aspectTitles, 'JABATAN','UNIT','STATUS','SKOR ATASAN','SKOR REKAN KERJA','SKOR BAWAHAN','SKOR AKHIR','KATEGORI']];
   const openRows = [['NIK PESERTA','NAMA PESERTA','NAMA RATER','PERAN','PERTANYAAN','JAWABAN']];
 
   progressEl.innerHTML = `<div class="progress-label">Mengambil semua data penilaian (1 batch besar)...</div>`;
@@ -845,12 +859,13 @@ async function exportResultsXlsx(progressEl){
       const res = results[k];
       if(res){
         const status = res.fullyComplete ? 'Lengkap' : 'Sebagian';
-        summary.push([rec.nik, rec.nama, rec.jabatan||'', rec.unit||'', status,
-          res.atasanScore??'', res.rekanScore??'', res.bawahanScore??'', res.finalScore??'', res.category||'']);
-        res.aspectRows.forEach(a=>{
-          aspectRowsOut.push([rec.nik, rec.nama, a.title,
-            a.perGroup.atasan??'', a.perGroup.rekan??'', a.perGroup.bawahan??'', a.s100??'']);
+        const aspectScores = OCEAN_DIMENSIONS.map(dim=>{
+          const row = res.aspectRows.find(a=>a.key===dim.key);
+          return row && row.s100!=null ? row.s100 : '';
         });
+        summary.push([rec.nik, rec.nama, ...aspectScores,
+          rec.jabatan||'', rec.unit||'', status,
+          res.atasanScore??'', res.rekanScore??'', res.bawahanScore??'', res.finalScore??'', res.category||'']);
         res.allAtasan.forEach(r=>ATASAN_OPEN.forEach(q=>openRows.push([rec.nik, rec.nama, r.raterNama||'', 'Atasan', q.label, r.open[q.id]||''])));
         res.allRekan.forEach(r=>REKAN_OPEN.forEach(q=>openRows.push([rec.nik, rec.nama, r.raterNama||'', 'Rekan Kerja', q.label, r.open[q.id]||''])));
         res.allBawahan.forEach(r=>BAWAHAN_OPEN.forEach(q=>openRows.push([rec.nik, rec.nama, r.raterNama||'', 'Bawahan', q.label, r.open[q.id]||''])));
@@ -861,7 +876,6 @@ async function exportResultsXlsx(progressEl){
   }
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), 'Ringkasan Skor');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aspectRowsOut), 'Skor per Aspek OCEAN');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(openRows), 'Jawaban Terbuka');
   XLSX.writeFile(wb, 'pegadaian-360-hasil.xlsx');
   progressEl.innerHTML = `<div class="success-note">Ekspor selesai. ${summary.length-1} peserta memiliki data penilaian.</div>`;
@@ -939,13 +953,18 @@ async function mountAdminPanel(mount){
 
   node.querySelector('#reset-data').addEventListener('click', async ()=>{
     if(!confirm(`Hapus "${record.nama}" (NIK ${record.nik}) beserta semua penilaiannya dari data? Tindakan ini tidak dapat dibatalkan.`)) return;
-    const cur = await getRoster();
-    const idx = cur.findIndex(r=>r.nik===record.nik);
-    if(idx>=0) cur.splice(idx,1);
-    await saveRoster(cur);
-    for(const p of asArray(record.atasan)) await storeDelete(atasanSubKey(record.nik, p.nik));
-    for(const p of (record.rekan||[])) await storeDelete(rekanSubKey(record.nik, p.nik));
-    for(const p of (record.bawahan||[])) await storeDelete(bawahanSubKey(record.nik, p.nik));
+    try{
+      const cur = await getRoster();
+      const idx = cur.findIndex(r=>r.nik===record.nik);
+      if(idx>=0) cur.splice(idx,1);
+      await saveRoster(cur);
+      for(const p of asArray(record.atasan)) await storeDelete(atasanSubKey(record.nik, p.nik));
+      for(const p of (record.rekan||[])) await storeDelete(rekanSubKey(record.nik, p.nik));
+      for(const p of (record.bawahan||[])) await storeDelete(bawahanSubKey(record.nik, p.nik));
+    }catch(e){
+      alert('Gagal menghapus data (koneksi ke database terputus). Coba lagi.');
+      return;
+    }
     STATE.view='adminHub'; render();
   });
 
@@ -969,9 +988,17 @@ async function mountAdminPanel(mount){
       if(nik && nama) newBawahan.push({nik, nama});
     });
     const newRecord = { nik:record.nik, nama:record.nama, jabatan:record.jabatan||'', unit:record.unit||'', atasan:newAtasan, rekan:newRekan, bawahan:newBawahan };
-    const cur = await getRoster();
-    upsertRoster(cur, newRecord);
-    await saveRoster(cur);
+    const saveBtn = node.querySelector('#save-assign');
+    if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'Menyimpan...'; }
+    try{
+      const cur = await getRoster();
+      upsertRoster(cur, newRecord);
+      await saveRoster(cur);
+    }catch(e){
+      if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = 'Simpan penugasan'; }
+      alert('Gagal menyimpan penugasan ke database (koneksi terputus atau server sibuk). Data BELUM tersimpan — coba klik simpan sekali lagi.');
+      return;
+    }
     record = newRecord;
     mountAdminPanel(mount);
   });
@@ -1101,7 +1128,16 @@ async function handleFormSave(node, kind, key, raterNik, raterNama, isFinal, bac
     alert(`Masih ada ${missing} pernyataan yang belum dijawab. Lengkapi seluruh pernyataan (atau pilih "Tidak memiliki informasi yang cukup untuk menilai") sebelum menyimpan penilaian final.`);
     return;
   }
-  await storeSet(key, { raterNik, raterNama, itemScores, open, submitted: isFinal, updatedAt: Date.now() });
+  const btn = node.querySelector(isFinal ? '#submit-form' : '#save-draft');
+  const originalLabel = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.textContent = 'Menyimpan...'; }
+  try{
+    await storeSet(key, { raterNik, raterNama, itemScores, open, submitted: isFinal, updatedAt: Date.now() });
+  }catch(e){
+    if(btn){ btn.disabled = false; btn.textContent = originalLabel; }
+    alert('Gagal menyimpan penilaian ke database (kemungkinan koneksi terputus atau server sedang sibuk). Jawaban Anda BELUM tersimpan — mohon coba klik simpan sekali lagi. Jika terus gagal, tunggu beberapa saat lalu coba lagi.');
+    return;
+  }
   STATE.view = backView; render();
 }
 
