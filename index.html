@@ -782,7 +782,7 @@ async function computeResultsForRecord(record, dataMap){
   if(rekanScore!=null) active.push({key:'rekan', score:rekanScore, weight:WEIGHTS.rekan});
   if(bawahanScore!=null) active.push({key:'bawahan', score:bawahanScore, weight:WEIGHTS.bawahan});
   let finalScore=null, category=null;
-  if(active.length>=2){
+  if(active.length>=1){
     const totalWeight = active.reduce((s,g)=>s+g.weight,0);
     finalScore = Math.round((active.reduce((s,g)=>s+g.score*g.weight,0)/totalWeight)*10)/10;
     category = getCategory(finalScore).label;
@@ -878,7 +878,7 @@ async function mountAdminPanel(mount){
     </div>
     <div class="card">
       <h2>Hasil gabungan</h2>
-      <div class="hint">Skor akhir dihitung dari kelompok penilai yang sudah mengisi (minimal 2 dari 3 kelompok: Atasan, Rekan Kerja, Bawahan).</div>
+      <div class="hint">Skor akhir dihitung dari kelompok penilai yang sudah mengisi penilaian final (minimal 1 dari 3 kelompok: Atasan, Rekan Kerja, Bawahan). Bobot dihitung ulang proporsional dari kelompok yang tersedia.</div>
       <div class="btn-row">
         <button class="btn btn-gold" id="view-results">Lihat hasil &amp; rekomendasi</button>
         <button class="btn btn-ghost" id="reset-data">Hapus peserta ini dari data</button>
@@ -1110,15 +1110,11 @@ async function mountResults(mount){
 
   const groupsWithData = (atasanSubs.length>0?1:0) + (rekanSubs.length>0?1:0) + (bawahanSubs.length>0?1:0);
 
-  if(groupsWithData < 2){
-    const need = [];
-    if(atasanSubs.length===0) need.push('penilaian Atasan');
-    if(rekanSubs.length===0) need.push('penilaian Rekan Kerja');
-    if(bawahanSubs.length===0) need.push('penilaian Bawahan');
+  if(groupsWithData < 1){
     mount.innerHTML = `
       <button class="back-link" id="back-admin">&larr; kembali ke panel admin</button>
       ${renderHero(`Menilai: <b style="color:var(--paper)">${escapeHtml(STATE.pesertaNama)}</b> &middot; NIK ${escapeHtml(STATE.pesertaNik)}`, {noBrand:true})}
-      <div class="card"><h2>Hasil belum lengkap</h2><div class="missing-note">Minimal 2 dari 3 kelompok penilai (Atasan, Rekan Kerja, Bawahan) harus sudah mengisi penilaian final. Yang masih kosong: ${need.join(', ')}.</div></div>`;
+      <div class="card"><h2>Hasil belum lengkap</h2><div class="missing-note">Belum ada satu pun kelompok penilai (Atasan, Rekan Kerja, Bawahan) yang mengisi penilaian final.</div></div>`;
     mount.querySelector('#back-admin').addEventListener('click', ()=>{ STATE.view='adminPanel'; render(); });
     return;
   }
