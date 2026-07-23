@@ -752,12 +752,9 @@ async function computeResultsForRecord(record, dataMap){
     Promise.all((record.rekan||[]).map(ref=>getSub(rekanSubKey(record.nik, ref.nik)))),
     Promise.all((record.bawahan||[]).map(ref=>getSub(bawahanSubKey(record.nik, ref.nik))))
   ]);
-  const atasanSubs = atasanSubsAll.filter(Boolean);
-  const rekanSubs = rekanSubsAll.filter(Boolean);
-  const bawahanSubs = bawahanSubsAll.filter(Boolean);
-  const allAtasan = atasanSubs.filter(r=>r.submitted);
-  const allRekan = rekanSubs.filter(r=>r.submitted);
-  const allBawahan = bawahanSubs.filter(r=>r.submitted);
+  const allAtasan = atasanSubsAll.filter(s=>s && s.submitted);
+  const allRekan = rekanSubsAll.filter(s=>s && s.submitted);
+  const allBawahan = bawahanSubsAll.filter(s=>s && s.submitted);
   const groupsWithData = (allAtasan.length>0?1:0) + (allRekan.length>0?1:0) + (allBawahan.length>0?1:0);
   if(groupsWithData < 1) return null;
 
@@ -770,30 +767,64 @@ async function computeResultsForRecord(record, dataMap){
     (bawahanAssigned===0 || allBawahan.length===bawahanAssigned) &&
     (atasanAssigned+rekanAssigned+bawahanAssigned) > 0;
 
-  const atasanAvgs = allAtasan.map(r=>overallAverage(OCEAN_DIMENSIONS, r.itemScores)).filter(v=>v!=null);
-  const atasanScore = atasanAvgs.length ? to100(atasanAvgs.reduce((a,b)=>a+b,0)/atasanAvgs.length) : null;
-  const rekanAvgs = allRekan.map(r=>overallAverage(OCEAN_DIMENSIONS, r.itemScores)).filter(v=>v!=null);
-  const rekanScore = rekanAvgs.length ? to100(rekanAvgs.reduce((a,b)=>a+b,0)/rekanAvgs.length) : null;
-  const bawahanAvgs = allBawahan.map(r=>overallAverage(OCEAN_DIMENSIONS, r.itemScores)).filter(v=>v!=null);
-  const bawahanScore = bawahanAvgs.length ? to100(bawahanAvgs.reduce((a,b)=>a+b,0)/bawahanAvgs.length) : null;
-
-  const active = [];
-  if(atasanScore!=null) active.push({key:'atasan', score:atasanScore, weight:WEIGHTS.atasan});
-  if(rekanScore!=null) active.push({key:'rekan', score:rekanScore, weight:WEIGHTS.rekan});
-  if(bawahanScore!=null) active.push({key:'bawahan', score:bawahanScore, weight:WEIGHTS.bawahan});
-  let finalScore=null, category=null;
-  if(active.length>=1){
-    const totalWeight = active.reduce((s,g)=>s+g.weight,0);
-    finalScore = Math.round((active.reduce((s,g)=>s+g.score*g.weight,0)/totalWeight)*10)/10;
-    category = getCategory(finalScore).label;
+  // Same item-level weighted aggregation as the in-app "Hasil & rekomendasi" page,
+  // so the exported numbers always match what's shown on screen.
+  function groupItemAvg(subs, dimKey, ii){
+    let sum=0,n=0;
+    subs.forEach(s=>{ const v=s.itemScores[`${dimKey}_${ii}`]; if(v && v!=='na'){ sum+=Number(v); n++; } });
+    return n>0 ? sum/n : null;
   }
-  return { allAtasan, allRekan, allBawahan, atasanScore, rekanScore, bawahanScore, finalScore, category, fullyComplete };
+  const groupDefs = [
+    { key:'atasan', label:'Atasan', subs:allAtasan, weight:WEIGHTS.atasan },
+    { key:'rekan', label:'Rekan Kerja', subs:allRekan, weight:WEIGHTS.rekan },
+    { key:'bawahan', label:'Bawahan', subs:allBawahan, weight:WEIGHTS.bawahan }
+  ];
+
+  const aspectRows = [];
+  let overallSum = 0, overallCount = 0;
+  OCEAN_DIMENSIONS.forEach(dim=>{
+    let itemWeightedScores = [];
+    dim.items.forEach((item, ii)=>{
+      const active = groupDefs.map(g=>({ key:g.key, weight:g.weight, avg: groupItemAvg(g.subs, dim.key, ii) })).filter(g=>g.avg!=null);
+      if(active.length===0) return;
+      const totalW = active.reduce((s,g)=>s+g.weight,0);
+      const weighted = active.reduce((s,g)=>s+g.avg*g.weight,0)/totalW;
+      itemWeightedScores.push(weighted);
+    });
+    const aspectRawAvg = itemWeightedScores.length ? itemWeightedScores.reduce((a,b)=>a+b,0)/itemWeightedScores.length : null;
+    const aspectScore100 = to100(aspectRawAvg);
+
+    const perGroupAspectAvgs = {};
+    groupDefs.forEach(g=>{
+      let sum=0,n=0;
+      g.subs.forEach(s=>dim.items.forEach((it,ii)=>{ const v=s.itemScores[`${dim.key}_${ii}`]; if(v && v!=='na'){ sum+=Number(v); n++; } }));
+      perGroupAspectAvgs[g.key] = n>0 ? to100(sum/n) : null;
+    });
+    if(aspectScore100!=null){ overallSum += aspectScore100; overallCount++; }
+    aspectRows.push({ key:dim.key, title:dim.title, s100: aspectScore100, perGroup: perGroupAspectAvgs });
+  });
+
+  const finalScore = overallCount>0 ? Math.round((overallSum/overallCount)*10)/10 : null;
+  const category = finalScore!=null ? getCategory(finalScore).label : null;
+
+  function overallGroupScore100(subs){
+    let sum=0,n=0;
+    subs.forEach(s=>OCEAN_DIMENSIONS.forEach(dim=>dim.items.forEach((it,ii)=>{ const v=s.itemScores[`${dim.key}_${ii}`]; if(v && v!=='na'){ sum+=Number(v); n++; } })));
+    return n>0 ? to100(sum/n) : null;
+  }
+  const atasanScore = overallGroupScore100(allAtasan);
+  const rekanScore = overallGroupScore100(allRekan);
+  const bawahanScore = overallGroupScore100(allBawahan);
+
+  return { allAtasan, allRekan, allBawahan, atasanScore, rekanScore, bawahanScore, finalScore, category, fullyComplete, aspectRows };
 }
+
 
 async function exportResultsXlsx(progressEl){
   progressEl.innerHTML = `<div class="progress-label">Memuat data peserta...</div>`;
   const roster = await getRoster();
   const summary = [['NIK','NAMA','JABATAN','UNIT','STATUS','SKOR ATASAN','SKOR REKAN KERJA','SKOR BAWAHAN','SKOR AKHIR','KATEGORI']];
+  const aspectRowsOut = [['NIK','NAMA','ASPEK OCEAN','SKOR ATASAN','SKOR REKAN KERJA','SKOR BAWAHAN','SKOR AKHIR ASPEK']];
   const openRows = [['NIK PESERTA','NAMA PESERTA','NAMA RATER','PERAN','PERTANYAAN','JAWABAN']];
 
   progressEl.innerHTML = `<div class="progress-label">Mengambil semua data penilaian (1 batch besar)...</div>`;
@@ -816,6 +847,10 @@ async function exportResultsXlsx(progressEl){
         const status = res.fullyComplete ? 'Lengkap' : 'Sebagian';
         summary.push([rec.nik, rec.nama, rec.jabatan||'', rec.unit||'', status,
           res.atasanScore??'', res.rekanScore??'', res.bawahanScore??'', res.finalScore??'', res.category||'']);
+        res.aspectRows.forEach(a=>{
+          aspectRowsOut.push([rec.nik, rec.nama, a.title,
+            a.perGroup.atasan??'', a.perGroup.rekan??'', a.perGroup.bawahan??'', a.s100??'']);
+        });
         res.allAtasan.forEach(r=>ATASAN_OPEN.forEach(q=>openRows.push([rec.nik, rec.nama, r.raterNama||'', 'Atasan', q.label, r.open[q.id]||''])));
         res.allRekan.forEach(r=>REKAN_OPEN.forEach(q=>openRows.push([rec.nik, rec.nama, r.raterNama||'', 'Rekan Kerja', q.label, r.open[q.id]||''])));
         res.allBawahan.forEach(r=>BAWAHAN_OPEN.forEach(q=>openRows.push([rec.nik, rec.nama, r.raterNama||'', 'Bawahan', q.label, r.open[q.id]||''])));
@@ -826,6 +861,7 @@ async function exportResultsXlsx(progressEl){
   }
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), 'Ringkasan Skor');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aspectRowsOut), 'Skor per Aspek OCEAN');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(openRows), 'Jawaban Terbuka');
   XLSX.writeFile(wb, 'pegadaian-360-hasil.xlsx');
   progressEl.innerHTML = `<div class="success-note">Ekspor selesai. ${summary.length-1} peserta memiliki data penilaian.</div>`;
