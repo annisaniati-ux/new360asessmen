@@ -208,11 +208,19 @@ let memoryStore = {};
 let STORAGE_OK = true;
 
 async function apiKv(body){
-  const res = await fetch('/api/kv', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify(body)
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(()=>controller.abort(), 6000);
+  let res;
+  try{
+    res = await fetch('/api/kv', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+  }finally{
+    clearTimeout(timeoutId);
+  }
   if(!res.ok){
     const err = await res.json().catch(()=>({}));
     throw new Error(err.error || `HTTP_${res.status}`);
@@ -240,7 +248,10 @@ async function storeDelete(key){
 }
 async function checkStorageHealth(){
   try{
-    const res = await fetch('/api/kv?health=1');
+    const controller = new AbortController();
+    const timeoutId = setTimeout(()=>controller.abort(), 5000);
+    const res = await fetch('/api/kv?health=1', { signal: controller.signal });
+    clearTimeout(timeoutId);
     if(!res.ok) return false;
     const data = await res.json();
     return !!data.connected;
@@ -265,12 +276,13 @@ async function subKeyForRole(pesertaNik, role, raterNik){
   return rekanSubKey(pesertaNik, raterNik);
 }
 
+function asArray(v){ if(!v) return []; return Array.isArray(v) ? v : [v]; }
 function findAssignmentsForRater(raterNik, roster){
   const out = [];
   for(const rec of roster){
-    (rec.atasan||[]).forEach(p=>{ if(p.nik===raterNik) out.push({pesertaNik:rec.nik, pesertaNama:rec.nama, role:'atasan', raterNama:p.nama}); });
-    (rec.rekan||[]).forEach(p=>{ if(p.nik===raterNik) out.push({pesertaNik:rec.nik, pesertaNama:rec.nama, role:'rekan', raterNama:p.nama}); });
-    (rec.bawahan||[]).forEach(p=>{ if(p.nik===raterNik) out.push({pesertaNik:rec.nik, pesertaNama:rec.nama, role:'bawahan', raterNama:p.nama}); });
+    asArray(rec.atasan).forEach(p=>{ if(p.nik===raterNik) out.push({pesertaNik:rec.nik, pesertaNama:rec.nama, role:'atasan', raterNama:p.nama}); });
+    asArray(rec.rekan).forEach(p=>{ if(p.nik===raterNik) out.push({pesertaNik:rec.nik, pesertaNama:rec.nama, role:'rekan', raterNama:p.nama}); });
+    asArray(rec.bawahan).forEach(p=>{ if(p.nik===raterNik) out.push({pesertaNik:rec.nik, pesertaNama:rec.nama, role:'bawahan', raterNama:p.nama}); });
   }
   return out;
 }
@@ -366,7 +378,16 @@ function renderRaterLogin(){
   const doLookup = async ()=>{
     const nik = wrap.querySelector('#my-nik').value.trim();
     if(!nik) return;
-    const roster = await getRoster();
+    const btn = wrap.querySelector('#lookup-btn');
+    const originalLabel = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Memuat...';
+    wrap.querySelector('#lookup-msg').innerHTML = '';
+    let roster;
+    try{
+      roster = await getRoster();
+    }finally{
+      btn.disabled = false; btn.textContent = originalLabel;
+    }
     const idx = findAssignmentsForRater(nik, roster);
     if(idx.length===0){
       wrap.querySelector('#lookup-msg').innerHTML = `<div class="missing-note">Belum ada penugasan penilaian untuk NIK ${escapeHtml(nik)}. Hubungi admin/HR untuk dipastikan datanya sudah diimpor.</div>`;
@@ -512,10 +533,12 @@ async function mountAdminHub(mount){
     }
     const cur = await getRoster();
     let record = findInRoster(cur, targetNik);
-    if(!record){ record = { nik:targetNik, nama:targetNama, jabatan:'', unit:'', atasan:null, rekan:[], bawahan:[] }; }
+    if(!record){ record = { nik:targetNik, nama:targetNama, jabatan:'', unit:'', atasan:[], rekan:[], bawahan:[] }; }
     else { record.nama = targetNama || record.nama; }
     if(role==='atasan'){
-      record.atasan = { nik:raterNik, nama:raterNama };
+      record.atasan = asArray(record.atasan);
+      const i = record.atasan.findIndex(p=>p.nik===raterNik);
+      if(i>=0) record.atasan[i] = {nik:raterNik, nama:raterNama}; else record.atasan.push({nik:raterNik, nama:raterNama});
     } else if(role==='rekan'){
       record.rekan = record.rekan || [];
       const i = record.rekan.findIndex(p=>p.nik===raterNik);
@@ -569,7 +592,7 @@ async function mountAdminHub(mount){
       if(!nik || !nama) return;
       const cur = await getRoster();
       if(!findInRoster(cur, nik)){
-        cur.push({ nik, nama, jabatan:'', unit:'', atasan:null, rekan:[], bawahan:[] });
+        cur.push({ nik, nama, jabatan:'', unit:'', atasan:[], rekan:[], bawahan:[] });
         await saveRoster(cur);
       }
       STATE.pesertaNik=nik; STATE.pesertaNama=nama; STATE.view='adminPanel'; render();
@@ -648,7 +671,7 @@ function parseWorkbookToRecords(wb){
       if(!nik){ skipped++; continue; }
       const nama = String(row[namaColIdx]||'').trim();
       const atasanNik = String(row[nikManagerIdx]||'').trim();
-      const atasan = atasanNik ? { nik:atasanNik, nama:String(row[namaManagerIdx]||'').trim() } : null;
+      const atasan = atasanNik ? [{ nik:atasanNik, nama:String(row[namaManagerIdx]||'').trim() }] : [];
       const rekan = peerNikIdxs.map((idx,k)=>{ const v=String(row[idx]||'').trim(); if(!v) return null; return {nik:v, nama:String(row[peerNamaIdxs[k]]||'').trim()}; }).filter(Boolean);
       const bawahan = teamNikIdxs.map((idx,k)=>{ const v=String(row[idx]||'').trim(); if(!v) return null; return {nik:v, nama:String(row[teamNamaIdxs[k]]||'').trim()}; }).filter(Boolean);
       records.push({ nik, nama, jabatan: jabatanColIdx>=0?String(row[jabatanColIdx]||'').trim():'', unit: unitColIdx>=0?String(row[unitColIdx]||'').trim():'', atasan, rekan, bawahan });
@@ -664,7 +687,7 @@ function parseWorkbookToRecords(wb){
       if(!nik){ skipped++; continue; }
       const nama = String(row[namaColIdx]||'').trim();
       const atasanNik = atasanIdx>=0 ? String(row[atasanIdx]||'').trim() : '';
-      const atasan = atasanNik ? { nik:atasanNik, nama: nikToNama[atasanNik] || '' } : null;
+      const atasan = atasanNik ? [{ nik:atasanNik, nama: nikToNama[atasanNik] || '' }] : [];
       const rekan = peerIdxs.map(idx=>{ const v=String(row[idx]||'').trim(); if(!v) return null; return {nik:v, nama:nikToNama[v]||''}; }).filter(Boolean);
       const bawahan = teamIdxs.map(idx=>{ const v=String(row[idx]||'').trim(); if(!v) return null; return {nik:v, nama:nikToNama[v]||''}; }).filter(Boolean);
       records.push({ nik, nama, jabatan: jabatanColIdx>=0?String(row[jabatanColIdx]||'').trim():'', unit: unitColIdx>=0?String(row[unitColIdx]||'').trim():'', atasan, rekan, bawahan });
@@ -675,14 +698,18 @@ function parseWorkbookToRecords(wb){
 
 /* ---------- EXPORT ---------- */
 function exportRosterXlsx(roster){
+  const maxAtasan = Math.max(0, ...roster.map(r=>asArray(r.atasan).length));
   const maxRekan = Math.max(0, ...roster.map(r=>(r.rekan||[]).length));
   const maxBawahan = Math.max(0, ...roster.map(r=>(r.bawahan||[]).length));
-  const header = ['NIK','NAMA','JABATAN','UNIT','NIK ATASAN','NAMA ATASAN'];
+  const header = ['NIK','NAMA','JABATAN','UNIT'];
+  for(let i=1;i<=maxAtasan;i++) header.push(`NIK ATASAN ${i}`, `NAMA ATASAN ${i}`);
   for(let i=1;i<=maxRekan;i++) header.push(`NIK REKAN ${i}`, `NAMA REKAN ${i}`);
   for(let i=1;i<=maxBawahan;i++) header.push(`NIK BAWAHAN ${i}`, `NAMA BAWAHAN ${i}`);
   const rows = [header];
   roster.forEach(r=>{
-    const row = [r.nik, r.nama, r.jabatan||'', r.unit||'', r.atasan?r.atasan.nik:'', r.atasan?r.atasan.nama:''];
+    const row = [r.nik, r.nama, r.jabatan||'', r.unit||''];
+    const atasanArr = asArray(r.atasan);
+    for(let i=0;i<maxAtasan;i++){ const p=atasanArr[i]; row.push(p?p.nik:'', p?p.nama:''); }
     for(let i=0;i<maxRekan;i++){ const p=(r.rekan||[])[i]; row.push(p?p.nik:'', p?p.nama:''); }
     for(let i=0;i<maxBawahan;i++){ const p=(r.bawahan||[])[i]; row.push(p?p.nik:'', p?p.nama:''); }
     rows.push(row);
@@ -777,7 +804,7 @@ async function mountAdminPanel(mount){
   const roster = await getRoster();
   let record = findInRoster(roster, STATE.pesertaNik);
   if(!record){ record = { nik:STATE.pesertaNik, nama:STATE.pesertaNama, jabatan:'', unit:'', atasan:[], rekan:[], bawahan:[] }; }
-  const atasanList = (record.atasan&&record.atasan.length) ? record.atasan : [null];
+  const atasanList = asArray(record.atasan).length ? asArray(record.atasan) : [null];
   const rekanList = (record.rekan&&record.rekan.length) ? record.rekan : [null,null];
   const bawahanList = (record.bawahan&&record.bawahan.length) ? record.bawahan : [null,null];
 
@@ -833,7 +860,7 @@ async function mountAdminPanel(mount){
     const idx = cur.findIndex(r=>r.nik===record.nik);
     if(idx>=0) cur.splice(idx,1);
     await saveRoster(cur);
-    for(const p of (record.atasan||[])) await storeDelete(atasanSubKey(record.nik, p.nik));
+    for(const p of asArray(record.atasan)) await storeDelete(atasanSubKey(record.nik, p.nik));
     for(const p of (record.rekan||[])) await storeDelete(rekanSubKey(record.nik, p.nik));
     for(const p of (record.bawahan||[])) await storeDelete(bawahanSubKey(record.nik, p.nik));
     STATE.view='adminHub'; render();
@@ -872,7 +899,7 @@ async function mountAdminPanel(mount){
 
 async function populateStatusGrid(container, record){
   container.innerHTML='';
-  const atasanList = record.atasan || [];
+  const atasanList = asArray(record.atasan);
   if(atasanList.length===0) container.appendChild(el(`<div class="empty-note">Atasan: belum ditugaskan.</div>`));
   for(const p of atasanList){
     const sub = await storeGet(atasanSubKey(record.nik, p.nik));
