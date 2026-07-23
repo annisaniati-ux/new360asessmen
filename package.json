@@ -1,0 +1,6 @@
+{
+  "name": "asesmen-360-pegadaian",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Asesmen 360 Pegadaian - static site + Upstash Redis-backed API"
+}
