@@ -1256,6 +1256,31 @@ async function mountResults(mount){
     <td class="score-cell"><b>${r.s100!=null?r.s100:'&ndash;'}</b></td>
   </tr>`).join('');
 
+  const itemCodes = [];
+  OCEAN_DIMENSIONS.forEach(dim=>dim.items.forEach((it,ii)=>itemCodes.push({code:it.code, key:`${dim.key}_${ii}`})));
+  const rawRaters = [
+    ...atasanSubs.map(s=>({...s, roleLabel:'Atasan'})),
+    ...rekanSubs.map(s=>({...s, roleLabel:'Rekan Kerja'})),
+    ...bawahanSubs.map(s=>({...s, roleLabel:'Bawahan'}))
+  ];
+  const rawTableRows = rawRaters.map(s=>`<tr>
+    <td>${escapeHtml(s.raterNama||s.raterNik||'')}</td>
+    <td style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--slate);">${s.roleLabel}</td>
+    ${itemCodes.map(ic=>`<td class="score-cell">${s.itemScores[ic.key]!=null && s.itemScores[ic.key]!=='na' ? s.itemScores[ic.key] : '&ndash;'}</td>`).join('')}
+  </tr>`).join('');
+  const rawTableHtml = rawRaters.length ? `
+    <div class="card">
+      <h2>Jawaban mentah (diagnostik)</h2>
+      <div class="hint">Nilai 1&ndash;4 persis seperti yang dipilih tiap rater per pernyataan. Gunakan ini untuk memastikan jawaban yang tersimpan sudah sesuai (bukan semua "1").</div>
+      <div style="overflow-x:auto;"><table class="dim-table"><thead><tr>
+        <th style="text-align:left;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--slate);padding-bottom:8px;">Rater</th>
+        <th style="text-align:left;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--slate);padding-bottom:8px;">Peran</th>
+        ${itemCodes.map(ic=>`<th style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--slate);padding-bottom:8px;">${ic.code}</th>`).join('')}
+      </tr></thead><tbody>
+        ${rawTableRows}
+      </tbody></table></div>
+    </div>` : '';
+
   mount.innerHTML = `
     <button class="back-link" id="back-admin">&larr; kembali ke panel admin</button>
     ${renderHero(`Menilai: <b style="color:var(--paper)">${escapeHtml(STATE.pesertaNama)}</b> &middot; NIK ${escapeHtml(STATE.pesertaNik)}`, {noBrand:true})}
@@ -1278,6 +1303,7 @@ async function mountResults(mount){
         ${aspectTableRows}
       </tbody></table>
     </div>
+    ${rawTableHtml}
   `;
   mount.querySelector('#back-admin').addEventListener('click', ()=>{ STATE.view='adminPanel'; render(); });
 }
