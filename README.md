@@ -48,3 +48,4 @@ sudah konek dan siap dipakai.
 - Kalau nanti mau ganti provider (misalnya ke Supabase/Postgres), yang perlu diubah
   cukup isi `api/kv.js` saja; `index.html` tidak perlu disentuh karena hanya bicara
   ke endpoint `/api/kv`.
+  
