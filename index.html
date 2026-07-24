@@ -1277,7 +1277,11 @@ async function mountResults(mount){
   const rawTableRows = rawRaters.map(s=>`<tr>
     <td>${escapeHtml(s.raterNama||s.raterNik||'')}</td>
     <td style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--slate);">${s.roleLabel}</td>
-    ${itemCodes.map(ic=>`<td class="score-cell">${s.itemScores[ic.key]!=null && s.itemScores[ic.key]!=='na' ? s.itemScores[ic.key] : '&ndash;'}</td>`).join('')}
+    ${itemCodes.map(ic=>`<td class="score-cell">${s.itemScores && s.itemScores[ic.key]!=null && s.itemScores[ic.key]!=='na' ? s.itemScores[ic.key] : '&ndash;'}</td>`).join('')}
+  </tr>`).join('');
+  const jsonDumpRows = rawRaters.map(s=>`<tr>
+    <td>${escapeHtml(s.raterNama||s.raterNik||'')} (${s.roleLabel})</td>
+    <td><code style="font-size:10.5px;">submitted=${String(s.submitted)}, keys tersimpan=[${Object.keys(s.itemScores||{}).join(', ')||'(kosong)'}]</code></td>
   </tr>`).join('');
   const rawTableHtml = rawRaters.length ? `
     <div class="card">
@@ -1290,6 +1294,8 @@ async function mountResults(mount){
       </tr></thead><tbody>
         ${rawTableRows}
       </tbody></table></div>
+      <div class="section-label" style="margin-top:16px;">Struktur data mentah (nama key yang benar-benar tersimpan)</div>
+      <table class="dim-table"><tbody>${jsonDumpRows}</tbody></table>
     </div>` : '';
 
   mount.innerHTML = `
