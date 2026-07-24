@@ -458,9 +458,10 @@ async function mountRaterInbox(mount){
     const total = dims.reduce((s,d)=>s+d.items.length,0);
     const subKey = await subKeyForRole(entry.pesertaNik, entry.role, STATE.raterNik);
     const sub = await storeGet(subKey);
-    const answered = sub ? Object.keys(sub.itemScores||{}).length : 0;
+    const answered = countAnsweredForDims(sub, dims);
     let statusClass='status-empty', statusText='Belum diisi';
-    if(sub && sub.submitted){ statusClass='status-done'; statusText='Terisi lengkap'; }
+    if(sub && sub.submitted && answered===total){ statusClass='status-done'; statusText='Terisi lengkap'; }
+    else if(sub && sub.submitted && answered<total){ statusClass='status-partial'; statusText=`Perlu isi ulang (${answered}/${total})`; }
     else if(answered>0){ statusClass='status-partial'; statusText=`${answered}/${total} terisi`; }
     const card = el(`<button class="role-card">
       <div class="rc-left"><div class="rc-title">${escapeHtml(entry.pesertaNama)}</div><div class="rc-sub">Peran Anda: ${ROLE_LABEL[entry.role]}</div></div>
@@ -1028,11 +1029,21 @@ async function populateStatusGrid(container, record){
     container.appendChild(statusCard(p, 'Bawahan', sub, OCEAN_DIMENSIONS));
   }
 }
+function countAnsweredForDims(sub, dims){
+  if(!sub || !sub.itemScores) return 0;
+  let n=0;
+  dims.forEach(dim=>dim.items.forEach((it,ii)=>{
+    const v = sub.itemScores[`${dim.key}_${ii}`];
+    if(v!=null && v!=='') n++;
+  }));
+  return n;
+}
 function statusCard(info, label, sub, dims){
   const total = dims.reduce((s,d)=>s+d.items.length,0);
-  const answered = sub ? Object.keys(sub.itemScores||{}).length : 0;
+  const answered = countAnsweredForDims(sub, dims);
   let statusClass='status-empty', statusText='Belum diisi';
-  if(sub && sub.submitted){ statusClass='status-done'; statusText='Terisi lengkap'; }
+  if(sub && sub.submitted && answered===total){ statusClass='status-done'; statusText='Terisi lengkap'; }
+  else if(sub && sub.submitted && answered<total){ statusClass='status-partial'; statusText=`Data tidak sesuai pertanyaan saat ini (${answered}/${total}) — minta rater isi ulang`; }
   else if(answered>0){ statusClass='status-partial'; statusText=`${answered}/${total} terisi`; }
   return el(`<div class="role-card" style="cursor:default;">
     <div class="rc-left"><div class="rc-title">${escapeHtml(info.nama)}</div><div class="rc-sub">${label} &middot; NIK ${escapeHtml(info.nik)}</div></div>
